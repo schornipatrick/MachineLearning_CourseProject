@@ -1,0 +1,186 @@
+---
+title: "WriteUp"
+author: "Patrick Schornboeck"
+date: "10/30/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Background and Intention
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. 
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.
+More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+In here, it is described how I conducted the data cleaning, analysis as well as how I built and evaluated the prediction model.
+
+# Seting up the analysis and machine learning
+
+A few things that can be looked up in the according script are not shown here, these are:
+
+* Loading the required packages
+* Downloading and reading in the data
+* Subsetting the testing file to myTrain(70%) and myTest(30%)
+
+```{r load packages, include = FALSE, cache = FALSE}
+library(AppliedPredictiveModeling); library(caret); library(ElemStatLearn); library(pgmm)
+library(rpart); library(gbm); library(lubridate); library(forecast); library(e1071); library(elasticnet)
+library(lattice); library(ggplot2); library(corrplot); library(plyr); library(randomForest)
+```
+
+
+```{r getting the data, include = FALSE, cache = FALSE}
+# download training data
+trainfile <- "train.csv"
+trainurl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+
+if (!exists(trainfile)) {
+  download.file(url = trainurl, destfile = trainfile, method = "curl")
+}
+
+# download testing data
+testfile <- "test.csv"
+testurl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+if (!exists(testfile)) {
+  download.file(url = testurl, destfile = testfile, method = "curl")
+}
+
+# reading in the data
+training <- read.csv(trainfile)
+testing <- read.csv(testfile)
+```
+
+
+```{r subsetting to myTrain and myTest, include = FALSE, cache = FALSE}
+# SPLIT IN MY TRAINING AND MY TEST SET, USING INITIAL TRAINING DATA
+inTrain <- createDataPartition(y = training$classe, p = 0.7, list = FALSE)
+myTrain <- training[inTrain, ]
+myTest <- training[-inTrain, ]
+```
+
+# Cleaning the data
+
+After reading in the complete data, it shall be cleaned, pusuing the following goal:
+
+**reducing the complexity (i.e. number of columns) for the model building**
+
+This is performed by removing:
+
+* columns that include mostly NAs
+* columns that include data in no correlation with the movement (e.g. time stamps and user names)
+* columns that are highly correlated with another one
+
+The precise code can be looked up in the R-script. 
+
+The following plot illustrates the correlation between the remaining variables.
+
+```{r cleaning the data, echo = FALSE}
+# Change fields that include "#DIV/0!" with NA
+for (i in 1:(ncol(myTrain)-1)) {
+  myTrain[, i] <- revalue(x = as.character(myTrain[, i]), replace = c("#DIV/0!" = NA), warn_missing = FALSE)
+}
+
+# Remove columns that have more than X% NAs
+
+X <- 0.8
+miss <- c()
+
+for (i in 1:ncol(myTrain)) {
+  if (sum(is.na(myTrain[, i])) > X * nrow(myTrain)) {miss <- append(miss, i)}
+}
+myTrain <- myTrain[, -miss]
+
+# Remove number, user name and time stamps and window
+miss2 <- c(1:7)
+myTrain <- myTrain[, -miss2]
+
+# evaluating and cohercing data class
+
+# We want to make sure, factors are numeric, except for the classe.
+for (i in 1:(ncol(myTrain)-1)) {
+  myTrain[,i] <- as.numeric(myTrain[,i])
+}
+
+# since there were many NAs introduced here, we can again remove columns that have more than X% NAs
+miss <- c()
+
+for (i in 1:ncol(myTrain)) {
+  if (sum(is.na(myTrain[, i])) > X * nrow(myTrain)) {miss <- append(miss, i)}
+}
+myTrain <- myTrain[, -miss]
+
+# After removing some columns, check for dependence among the remaining variables
+
+# For the correlation matrix, remove variable I want to predict
+corMyTrain <- subset(myTrain, select = -c(classe))
+
+# plot dependence among variables
+cor <- cor(corMyTrain)
+# corrplot(cor, method = "circle", tl.cex = 0.4)
+
+# As we can identify some dark blue spots, highly correlated variables (cor > Y%) shall be removed
+# We hope, this accelerates the model building.
+
+Y <- 0.98
+miss3 <- findCorrelation(cor(corMyTrain), cutoff = Y)
+miss3 <- sort(miss3)
+myTrain <- myTrain[, -miss3]
+
+# illustrate new dependence
+corMyTrain <- corMyTrain[, -miss3]
+cor <- cor(corMyTrain)
+corrplot(cor, method = "circle", tl.cex = 0.4)
+```
+
+**In total, we reduced the number of variables from 160 to 50, using X = 0.8 for the proportion of NAs in a column and Y = 0.98 for the covariance.**
+
+# Coming up with the right Model
+
+## Building the Model with the myTrain dataset
+
+From what I experienced in class, I thought that the random forest algorithm might get the highest accuracy for this kind of problem.
+This hypothesis shall be checked by applying its prediction first to the myTrain dataset. According to the outcome, we can decide afterwards on applying a different model or using a combination of various models.
+
+
+```{r build model}
+
+ModRF <- randomForest(classe~., data = myTrain, ntree = 200) 
+
+```
+
+When I first tried to build a random forest model with caret (method "rf") and default settings, it did not get a result for a couple of hours.
+After that, I decided on further reducing the number of variables and restricting the number of trees to 200 (ntree = 200) while the default is 500.
+This model was then built in the matter of a few moments.
+
+## Evaluating the random forest model on the training set: myTrain
+
+```{r training set evaluation}
+TrainPred <- predict(ModRF, myTrain)
+confMatTrain <- confusionMatrix(TrainPred, myTrain$classe)
+confMatTrain
+```
+
+**The perfect training set accuracy gives us confidence to further apply the random forest model.**
+
+## Evaluating the random forest model on the testing set: myTest
+
+```{r test set evaluation}
+TestPred <- predict(ModRF, myTest)
+confMatTest <- confusionMatrix(TestPred, myTest$classe)
+confMatTest
+```
+
+**We achieve an overall testing accuracy of 99.42%**
+
+## Applying the random forest model on the test set for the quiz: testing
+
+```{r quiz solving}
+QuizPred <- predict(ModRF, testing)
+QuizPred
+```
+
+**With that model, I achieved 20 out of 20 points at the quiz which further increases confidence in the chosen model**
