@@ -174,7 +174,12 @@ confMatTest <- confusionMatrix(TestPred, myTest$classe)
 confMatTest
 ```
 
-**We achieve an overall testing accuracy of 99.42%**
+**We achieve an overall testing accuracy of `r confMatTest$overall[1] * 100` %**
+
+```{r out of sample error}
+OSE <- 1- sum(TestPred == myTest$classe)/length(TestPred)
+```
+**The out of sample error is `r OSE * 100` %** 
 
 ## Applying the random forest model on the test set for the quiz: testing
 
